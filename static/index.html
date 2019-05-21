@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
+    <script src="keyCodes.js"></script>
+    <script src="jquery-3.4.1.slim.min.js"></script>
+    <script src="howler.min.js"></script>
+    <script>
+        const K_MOUSE_POW = 1.4;
+        const K_SCROLL_SPEED = 0.25;
+        const AUTO_BTN_MIN_T = 100;
+        const AUTO_BTN_MIN_D = 50;
+        function toRemoteDelta(d, k) {
+            return Math.round(Math.sign(d) * Math.pow(Math.abs(d), K_MOUSE_POW));
+        }
+        function cancel(e) { e.preventDefault(); e.stopPropagation() }
+        function mkButton(id) {
+            $('#' + id).on("touchstart", function(e) {
+                cancel(e);
+                window.socket.send(id + ",down");
+            }).on("touchmove", function (e) {
+                cancel(e);
+            }).on("touchend", function (e) {
+                cancel(e);
+                window.socket.send(id + ",up");
+            });
+        }
+        function try2connect() {
+            usocket = new URL('socket', window.location);
+            usocket.protocol = usocket.protocol.replace('http', 'ws');
+            window.socket = new WebSocket(usocket.href);
+            window.socket.onopen    = function (event) { console.log(event) };
+            window.socket.onmessage = function (event) { console.log(event.data) };
+            window.socket.onclose   = function (event) { console.log(event); setTimeout(function() { try2connect() }, 200) };
+            window.socket.onerror   = function (event) { alert("Socket error: " + event.message); window.socket.close() };
+        }
+        $(function() {
+            $('#canvas').on("touchstart", function(e) {
+                cancel(e);
+                var ts = e.originalEvent.changedTouches;
+                if(ts.length == 1) {
+                    window.refPos = {x: ts[0].pageX, y: ts[0].pageY};
+                    window.basePos = {x: ts[0].pageX, y: ts[0].pageY};
+                    window.refTime = new Date();
+                }
+            }).on("touchmove", function (e) {
+                cancel(e);
+                var ts = e.originalEvent.changedTouches;
+                if(ts.length == 1) {
+                    var curr = {x: ts[0].pageX, y: ts[0].pageY};
+                    var dx = curr.x - window.refPos.x;
+                    var dy = curr.y - window.refPos.y;
+                    window.socket.send("mouse," + toRemoteDelta(dx) + "," + toRemoteDelta(dy));
+                    window.refPos = curr;
+                }
+            }).on("touchend", function(e) {
+                cancel(e);
+                var ts = e.originalEvent.changedTouches;
+                if(ts.length == 1) {
+                    var curr = {x: ts[0].pageX, y: ts[0].pageY};
+                    var dx = curr.x - window.basePos.x;
+                    var dy = curr.y - window.basePos.y;
+                    var dst = Math.sqrt(dx * dx + dy * dy);
+                    var t = new Date() - window.refTime;
+                    if(t < AUTO_BTN_MIN_T && dst < AUTO_BTN_MIN_D) {
+                        window.socket.send("leftbtn,down");
+                        window.socket.send("leftbtn,up");
+                    }
+                }
+            });
+            $('#scroll').on("touchstart", function(e) {
+                cancel(e);
+                var ts = e.originalEvent.changedTouches;
+                if(ts.length == 1) {
+                    window.scrollPos = ts[0].pageY;
+                }
+            }).on("touchmove", function (e) {
+                cancel(e);
+                var ts = e.originalEvent.changedTouches;
+                if(ts.length == 1) {
+                    var curr = ts[0].pageY;
+                    var dy = Math.round(K_SCROLL_SPEED * (curr - window.scrollPos));
+                    window.socket.send("scroll," + dy);
+                    window.scrollPos = curr;
+                }
+            });
+            var setTab = function (e, tab) {
+              cancel(e);
+              $('#canvas, #keyboardc, #kbc').hide();
+              $(tab).show();
+            };
+            $('#touchpad').click(function(e) { setTab(e, '#canvas') });
+            $('#keyboard') .click(function(e) { setTab(e, '#keyboardc'); prepareLayout() });
+            $('#kbset') .click(function(e) { setTab(e, '#kbc'); keyboardSetKeyCodes() });
+
+            $('.button-send')  .mousedown(function(e) { cancel(e); window.socket.send("string," + $(this).data("send")) });
+            $('.button-dotype').mousedown(function(e) { cancel(e); window.socket.send("dotype," + $(this).data("send")) });
+
+            mkButton('leftbtn');
+            mkButton('middlebtn');
+            mkButton('rightbtn');
+            try2connect();
+
+            window.sounddown = new Howl({src: ['down.mp3']});
+            window.soundup   = new Howl({src: ['up.mp3']});
+
+        });
+
+        function makeKeyHandler(isDown, keyCode) {
+          return function (e) {
+            cancel(e);
+            (isDown ? window.sounddown: window.soundup).play();
+            $(this).css({"background-color": (isDown ? "rgba(0,0,0,0.3)": "rgba(0,0,0,0)")});
+            window.socket.send("key," + (isDown ? "down": "up") + "," + keyCode);
+          };
+        }
+
+        function prepareLayout() {
+          if(!!window.preparedKeyboard)
+            return;
+          window.preparedKeyboard = true;
+          var bw = window.keyBounds.w;
+          var bh = window.keyBounds.h;
+          var ix = $('#kblayout').position().left;
+          var iy = $('#kblayout').position().top;
+          var iw = $('#kblayout').get()[0].width;
+          var ih = $('#kblayout').get()[0].height;
+          var C = $('#keyboardc');
+          var V = window.keyBounds.bounds;
+          for(var j = 0; j < V.length; j++) {
+            var x = ix + ~~((iw * V[j].x) / bw);
+            var y = iy + ~~((ih * V[j].y) / bh);
+            var w = ~~((iw * V[j].w) / bw);
+            var h = ~~((ih * V[j].h) / bh);
+            var k = window.keyCodes[j];
+            C.append($('<div class="keybtn" />')
+              .css({left: x + "px", top: y + "px", width: w + "px", height: h + "px"})
+              .on("touchstart", makeKeyHandler(true,  k))
+              .on("touchend",   makeKeyHandler(false, k)));
+          }
+        }
+
+        function keyboardSetKeyCodes() {
+          if(!!window.keyBounds && window.iKeyBound < window.keyBounds.length) {
+            window.iKeyBound++;
+            return;
+          }
+          var c = $('#kbc').get()[0];
+          var i = $('#keyboardc > img').get()[0];
+          c.width = i.width;
+          c.height = i.height;
+          var t = c.getContext('2d');
+          t.drawImage(i, 0, 0, i.width, i.height);
+          window.t = t;
+
+          {
+            var d = t.getImageData(0, 0, c.width, c.height);
+
+            // todos los píxeles detectados como transparentes ponemos a rojo, color clave RGBA ff0000ff
+            var ALPHA_MAX = 128;
+            for(var j = 0; j < d.data.length; j++) {
+              var k = j << 2;
+              if(d.data[k + 3] < ALPHA_MAX) {
+                d.data[k + 0] = 255;
+                d.data[k + 1] = 0;
+                d.data[k + 2] = 0;
+                d.data[k + 3] = 255;
+              }
+            }
+
+            var ipixel = function (x, y) { return (y * c.width + x) << 2 };
+            var visited = function (q) { return d.data[q] == 255 && d.data[q + 1] == 0 && d.data[q + 2] == 0 && d.data[q + 3] == 255 };
+            var keyBounds = [];
+            // buscamos píxeles libres y calculamos su covertura mínima
+            for(var y = 0; y < c.height; y++)
+              for(var x = 0; x < c.width; x++)
+                if(!visited(ipixel(x, y))) {
+                  var minx = c.width;
+                  var maxx = 0;
+                  var miny = c.height;
+                  var maxy = 0;
+                  var queue = [{x: x, y: y}];
+                  while(queue.length > 0) {
+                    var p = queue.pop();
+                    if(p.x >= 0 && p.x < c.width && p.y >= 0 && p.y < c.height) {
+                      var j = ipixel(p.x, p.y);
+                      if(!visited(j)) {
+                        d.data[j + 0] = 255;
+                        d.data[j + 1] = 0;
+                        d.data[j + 2] = 0;
+                        d.data[j + 3] = 255;
+                        if(p.x < minx) minx = p.x;
+                        if(p.x > maxx) maxx = p.x;
+                        if(p.y < miny) miny = p.y;
+                        if(p.y > maxy) maxy = p.y;
+                        queue.push({x: p.x + 1, y: p.y    });
+                        queue.push({x: p.x    , y: p.y + 1});
+                        queue.push({x: p.x - 1, y: p.y    });
+                        queue.push({x: p.x    , y: p.y - 1});
+                      }
+                    }
+                  }
+                  keyBounds.push({x: minx, y: miny, w: maxx - minx + 1, h: maxy - miny + 1});
+                }
+
+            // dibujamos detecciones
+            t.beginPath();
+            t.strokeStyle = "blue";
+            for(var j = 0; j < keyBounds.length; j++)
+              t.rect(keyBounds[j].x, keyBounds[j].y, keyBounds[j].w, keyBounds[j].h);
+            t.stroke();
+
+            // imprimimos en el orden que serán resaltadas
+            console.log("SIZE " + c.width + " " + c.height);
+            for(var j = 0; j < keyBounds.length; j++)
+              console.log("BOUND " + keyBounds[j].x + " " + keyBounds[j].y + " " + keyBounds[j].w + " " + keyBounds[j].h);
+
+            window.keyBounds = keyBounds;
+            window.iKeyBound = 0;
+            blinkKeyBound();
+          }
+        }
+
+        function keyRect(j, color) {
+          var t = $('#kbc').get()[0].getContext('2d');
+          t.beginPath();
+          t.strokeStyle = color;
+          t.rect(keyBounds[j].x, keyBounds[j].y, keyBounds[j].w, keyBounds[j].h);
+          t.stroke();
+        }
+        function blinkKeyBound() {
+          var j = window.iKeyBound;
+          keyRect(j, "white");
+          setTimeout(function () {
+            keyRect(j, "blue");
+            setTimeout(blinkKeyBound, 150);
+          }, 150);
+        }
+
+    </script>
+    <style>
+      html, body {
+        position: fixed;
+        overflow-y: hidden;
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+      }
+      #canvas {
+        height: 90%;
+        background-color: lightgray;
+      }
+      #keyboardc {
+        height: 90%;
+        background-color: white;
+      }
+      #kbc {
+        position: absolute;
+        left: 0;
+        top: 0;
+      }
+      .keybtn {
+        position: absolute;
+      }
+      #leftbtn {
+        position: absolute;
+        top: 0;
+        left: 0;
+        background-color: lightsalmon;
+        width: 15%;
+        height: 30%;
+      }
+      #middlebtn {
+        position: absolute;
+        top: 30%;
+        left: 0;
+        background-color: lightgreen;
+        width: 15%;
+        height: 30%;
+      }
+      #rightbtn {
+        position: absolute;
+        top: 60%;
+        left: 0;
+        background-color: lightblue;
+        width: 15%;
+        height: 30%;
+      }
+      #scroll {
+        position: absolute;
+        top: 0;
+        left: 15%;
+        background-color: gray;
+        width: 15%;
+        height: 90%;
+      }
+      #touchpad {
+        position: absolute;
+        bottom: 0;
+        left: 0%;
+        width: 10%;
+        height: 10%;
+      }
+      #keyboard {
+        position: absolute;
+        bottom: 0;
+        left: 10%;
+        width: 10%;
+        height: 10%;
+      }
+      #kbset {
+        position: absolute;
+        bottom: 0;
+        right: 0;
+        width: 10%;
+        height: 10%;
+      }
+      .button {
+        width: auto;
+        height: 13%;
+        margin-top: 2%;
+        font-size: 1.7em;
+        color: white;
+      }
+      .mplayer {
+        background-color: green;
+      }
+      .system {
+        background-color: blue;
+      }
+      #kblayout {
+        width: 100%;
+        bottom: 15%;
+        position: absolute;
+      }
+    </style>
+</head>
+<body>
+<div id="canvas">
+    <div id="leftbtn"></div>
+    <div id="middlebtn"></div>
+    <div id="rightbtn"></div>
+    <div id="scroll"></div>
+</div>
+<div id="keyboardc" style="display: none">
+  <img src="keyboard.gif" id="kblayout" />
+</div>
+<canvas id="kbc" style="display: none">
+</canvas>
+<input type="button" value="touchpad" id="touchpad"/>
+<input type="button" value="keyboard" id="keyboard"/>
+<input type="button" value="kbset" id="kbset"/>
+</body>
+</html>
