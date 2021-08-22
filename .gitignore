@@ -1,3 +1,4 @@
 .stack-work/
 remotex.cabal
+stack.yaml.lock
 *~

@@ -3,13 +3,18 @@
 <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
     <script src="keyCodes.js"></script>
-    <script src="jquery-3.4.1.slim.min.js"></script>
+    <script src="jquery-3.6.0.min.js"></script>
     <script src="howler.min.js"></script>
     <script>
         const K_MOUSE_POW = 1.4;
         const K_SCROLL_SPEED = 0.25;
         const AUTO_BTN_MIN_T = 100;
         const AUTO_BTN_MIN_D = 50;
+
+        var SpeechRecognition = SpeechRecognition || webkitSpeechRecognition;
+        var SpeechGrammarList = SpeechGrammarList || webkitSpeechGrammarList;
+        var SpeechRecognitionEvent = SpeechRecognitionEvent || webkitSpeechRecognitionEvent;
+
         function toRemoteDelta(d, k) {
             return Math.round(Math.sign(d) * Math.pow(Math.abs(d), K_MOUSE_POW));
         }
@@ -30,9 +35,48 @@
             usocket.protocol = usocket.protocol.replace('http', 'ws');
             window.socket = new WebSocket(usocket.href);
             window.socket.onopen    = function (event) { console.log(event) };
-            window.socket.onmessage = function (event) { console.log(event.data) };
+            window.socket.onmessage = function (event) {
+              window.lastSocketReceived = event;
+              if(event.data != "") {
+                var r;
+                try {
+                  r = JSON.parse(event.data);
+                } catch(ex) {
+                  r = {'type': 'error', 'message': ('cannot parse: "' + event.data + '" as JSON')};
+                }
+                switch(r.type) {
+                case 'error':
+                  $('#big').html($('<span class="text-error"></span>').text('ERROR: ' + r.message))
+                           .show();
+                  break;
+                case 'voicelist':
+                  $('#big').empty();
+                  for(var [k, v] of Object.entries(r.voices))
+                    $('#big').append(
+                      $('<div/>')
+                        .append($('<span class="text-voice"></span>').text(k))
+                        .append($('<span class="text-description"></span>').text(r.voices[k])));
+                  $('#big').show();
+                  break;
+                case 'result':
+                  if(!r.success)
+                    $(document.body).fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
+                  if(r.message != "")
+                    $('#big').empty().append($('<span/>').text(r.message)).show();
+                  if(r.html != "")
+                    $('#big').html(r.html).show();
+                  break;
+                default:
+                  alert('FATAL ERROR: unknown response type "' + r.type + '"');
+                  break;
+                }
+              }
+            };
             window.socket.onclose   = function (event) { console.log(event); setTimeout(function() { try2connect() }, 200) };
-            window.socket.onerror   = function (event) { alert("Socket error: " + event.message); window.socket.close() };
+            window.socket.onerror   = function (event) {
+              $('#big').empty().append($('<span/>').text("Socket error: " + event.message)).show();
+              window.socket.close();
+            };
         }
         $(function() {
             $('#canvas').on("touchstart", function(e) {
@@ -89,9 +133,39 @@
               $('#canvas, #keyboardc, #kbc').hide();
               $(tab).show();
             };
+            $('#big').click(function(e) { $('#big').hide(); });
             $('#touchpad').click(function(e) { setTab(e, '#canvas') });
-            $('#keyboard') .click(function(e) { setTab(e, '#keyboardc'); prepareLayout() });
-            $('#kbset') .click(function(e) { setTab(e, '#kbc'); keyboardSetKeyCodes() });
+            $('#keyboard').click(function(e) { setTab(e, '#keyboardc'); prepareLayout() });
+            $('#voice').click(function(e) {
+
+              var recognition = new SpeechRecognition();
+
+              recognition.grammars = new SpeechGrammarList();
+              recognition.lang = 'es-ES';
+              recognition.interimResults = false;
+              recognition.maxAlternatives = 1;
+
+              $('#voice').addClass('recording');
+              recognition.start();
+
+              recognition.onresult = function(event) {
+                var r = event.results[0][0];
+                var speechResult = r.transcript.toLowerCase().replace(/,/g,' ');;
+                if(r.confidence < 0.75)
+                  $('#big').empty()
+                    .append($('<p class="text-voice"/>').text('LOW QUALITY VOICE'))
+                    .append($('<p class="text-description"/>').text(speechResult))
+                    .show();
+                else
+                  window.socket.send('voicecommand,' + speechResult);
+              }
+
+              recognition.onspeechend = function() {
+                $('#voice').removeClass('recording');
+                recognition.stop();
+              }
+            });
+            $('#kbset').click(function(e) { setTab(e, '#kbc'); keyboardSetKeyCodes() });
 
             $('.button-send')  .mousedown(function(e) { cancel(e); window.socket.send("string," + $(this).data("send")) });
             $('.button-dotype').mousedown(function(e) { cancel(e); window.socket.send("dotype," + $(this).data("send")) });
@@ -251,6 +325,16 @@
         height: 90%;
         background-color: lightgray;
       }
+      #big {
+        height: 90%;
+        width: 100%;
+        overflow: scroll;
+        z-index: 999;
+        position: absolute;
+        left: 0;
+        top: 0;
+        background-color: rgba(255, 255, 255, 0.75);
+      }
       #keyboardc {
         height: 90%;
         background-color: white;
@@ -309,6 +393,16 @@
         width: 10%;
         height: 10%;
       }
+      #voice {
+        position: absolute;
+        bottom: 0;
+        left: 20%;
+        width: 10%;
+        height: 10%;
+      }
+      .recording {
+        background-color: red;
+      }
       #kbset {
         position: absolute;
         bottom: 0;
@@ -334,6 +428,14 @@
         bottom: 15%;
         position: absolute;
       }
+      .text-voice {
+        font-weight: bold;
+        font-size: 1.5em;
+        margin: 0.1em 1em 0.1em 1em;
+      }
+      .text-description {
+        font-size: 1.5em;
+      }
     </style>
 </head>
 <body>
@@ -348,8 +450,10 @@
 </div>
 <canvas id="kbc" style="display: none">
 </canvas>
+<div id="big" style="display: none"></div>
 <input type="button" value="touchpad" id="touchpad"/>
 <input type="button" value="keyboard" id="keyboard"/>
+<input type="button" value="voice" id="voice"/>
 <input type="button" value="kbset" id="kbset"/>
 </body>
 </html>

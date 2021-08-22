@@ -14,18 +14,32 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 import Data.Text.Read (signed, decimal)
 
-mouseDelta display window dx dy = X.selectInput display window X.keyReleaseMask >> X.warpPointer display 0 0 0 0 0 0 dx dy >> X.flush display
+ok = return ""
 
-mouseButton display button mode = X.fakeButtonEvent display button (mode == "down") 0 >> X.flush display
+mouseDelta display window dx dy = X.selectInput display window X.keyReleaseMask >> X.warpPointer display 0 0 0 0 0 0 dx dy >> X.flush display >> ok
 
-mouseScroll display d = mapM_ (\_ -> btn True >> btn False) [1..abs d] >> X.flush display
+mouseButton display button mode = X.fakeButtonEvent display button (mode == "down") 0 >> X.flush display >> ok
+
+mouseScroll display d = mapM_ (\_ -> btn True >> btn False) [1..abs d] >> X.flush display >> ok
   where btn s = X.fakeButtonEvent display (if d < 0 then 4 else 5) s 0
 
-keyAction display down code = X.fakeKeyEvent display code down 0 >> X.flush display
+keyAction display down code = X.fakeKeyEvent display code down 0 >> X.flush display >> ok
 
 int int = case signed decimal int of
             Right (n, "") -> Right n
             _             -> Left $ "'" <> int <> "' is not a valid integer value"
+
+voicelist = do
+  let voices = "{\"type\": \"voicelist\", \"voices\": {\"voz1\": \"una voz muy bonita\", \"voz2\": \"una voz muy fea\"}}"
+  return voices
+
+jstr = Text.replace "\"" "\\\""
+
+voiceok = return "{\"type\": \"result\", \"success\": true, \"message\": \"\"}"
+
+voicecommand cmd = do
+  Text.putStrLn cmd
+  voiceok
 
 digestX11 display window message = case Text.split (','==) message of
   ["mouse"    , dx, dy]     -> mouseDelta display window <$> int dx <*> int dy
@@ -34,11 +48,13 @@ digestX11 display window message = case Text.split (','==) message of
   ["rightbtn" , mode]       -> Right $ mouseButton display 3 mode
   ["scroll"   , d]          -> mouseScroll display <$> int d
   ["key"      , mode, code] -> keyAction display (mode == "down") <$> int code
-  _                         -> Left $ "cannot parse message: " <> message
+  ["voicecommand", cmd]     -> Right $ voicecommand cmd
+  ["voicelist"]             -> Right $ voicelist
+  _                         -> Left $ "{\"type\": \"error\", \"message\": \"cannot parse message: " <> jstr message <> "\"}"
 
-appSockets :: (Text -> Either Text (IO ())) -> PendingConnection -> IO ()
+appSockets :: (Text -> Either Text (IO Text)) -> PendingConnection -> IO ()
 appSockets digest iconn = acceptRequest iconn >>= \conn -> forever $ digest <$> receiveData conn >>= \case
-  Right action -> action
+  Right action -> action >>= sendTextData conn
   Left  error  -> Text.putStrLn error >> sendTextData conn error
 
 appStatic = staticApp $ defaultWebAppSettings "."
