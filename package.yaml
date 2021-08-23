@@ -20,7 +20,10 @@ dependencies:
 - wai-app-static
 - wai-websockets
 - text
+- text-icu
 - websockets
+- directory
+- process
 
 executables:
   remotex-exe:

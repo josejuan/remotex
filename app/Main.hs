@@ -1,7 +1,8 @@
-{-# LANGUAGE OverloadedStrings, LambdaCase #-}
+{-# LANGUAGE OverloadedStrings, LambdaCase, RecordWildCards #-}
 module Main where
 
 import Data.Monoid((<>))
+import Data.Maybe
 import Control.Monad (forever)
 import Network.Wai.Handler.Warp (run)
 import Network.Wai.Application.Static (staticApp, defaultWebAppSettings)
@@ -13,6 +14,11 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 import Data.Text.Read (signed, decimal)
+import Data.Text.ICU (normalize, NormalizationMode(NFD))
+import Data.Text.ICU.Char (property, Bool_(Diacritic))
+import System.Directory (listDirectory, getHomeDirectory)
+import System.Process
+import System.Exit
 
 ok = return ""
 
@@ -29,17 +35,56 @@ int int = case signed decimal int of
             Right (n, "") -> Right n
             _             -> Left $ "'" <> int <> "' is not a valid integer value"
 
+data OutputMode = AsText | AsHtml | NoOutput deriving Show
+
+data Voice = Voice { voice_file :: FilePath
+                   , voice_name :: Text
+                   , voice_description :: Text
+                   , voice_outputmode :: OutputMode } deriving Show
+
+getUserVoices = do
+    d <- (<> "/remotex/voicecommands") <$> getHomeDirectory
+    let   readvoice f = (parsevoice . Text.lines) <$> Text.readFile f'
+                        where f' = d <> "/" <> f
+                              parsevoice script = Voice f' <$> getName script
+                                                           <*> getDescription script
+                                                           <*> getOutputMode script
+          get pfx [] = Nothing
+          get pfx (x:xs) = if Text.isPrefixOf pfx x then Just (Text.drop (Text.length pfx) x) else get pfx xs
+          getName = get "#remotex.title "
+          getDescription = get "#remotex.description "
+          getOutputMode xs = m <$> get "#remotex.outputmode " xs
+                          where m "text" = AsText
+                                m "html" = AsHtml
+                                m _      = NoOutput
+    listDirectory d >>= mapM readvoice >>= return . catMaybes
+
 voicelist = do
-  let voices = "{\"type\": \"voicelist\", \"voices\": {\"voz1\": \"una voz muy bonita\", \"voz2\": \"una voz muy fea\"}}"
-  return voices
+    xs <- getUserVoices
+    return $ "{\"type\": \"voicelist\", \"voices\": {" <> Text.intercalate "," (map jvoice xs) <> "}}"
+  where jvoice Voice { .. } = "\"" <> jstr voice_name <> "\": \"" <> jstr voice_description <> "\""
 
-jstr = Text.replace "\"" "\\\""
+jstr = Text.replace "\n" "\\n" . Text.replace "\r" "\\r" . Text.replace "\t" "\\t" . Text.replace "\"" "\\\""
 
-voiceok = return "{\"type\": \"result\", \"success\": true, \"message\": \"\"}"
+result success message html = "{\"type\": \"result\", \"success\": " <> (if success then "true" else "false") <> ", \"message\": \"" <> jstr message <> "\", \"html\": \"" <> jstr html <> "\"}"
+resultko message = result False message ""
+resultok message = result True message ""
+resulthtml = result True ""
+
+normtext = Text.toLower . Text.filter (not . property Diacritic) . normalize NFD
 
 voicecommand cmd = do
-  Text.putStrLn cmd
-  voiceok
+  xs <- getUserVoices
+  case listToMaybe [v | v <- xs, normtext (voice_name v) == normtext cmd] of
+    Nothing -> return $ retko $ "command \"" <> cmd <> "\" not found"
+    Just (Voice {..}) -> do
+                            (exitcode, stdout, stderr) <- readProcessWithExitCode voice_file [] ""
+                            case exitcode of
+                              ExitSuccess -> case voice_outputmode of
+                                               AsText -> return $ resultok $ Text.pack stdout
+                                               AsHtml -> return $ resulthtml $ Text.pack stdout
+                                               _      -> return $ resultok ""
+                              _           -> return $ resultko $ Text.pack stderr
 
 digestX11 display window message = case Text.split (','==) message of
   ["mouse"    , dx, dy]     -> mouseDelta display window <$> int dx <*> int dy
@@ -50,12 +95,14 @@ digestX11 display window message = case Text.split (','==) message of
   ["key"      , mode, code] -> keyAction display (mode == "down") <$> int code
   ["voicecommand", cmd]     -> Right $ voicecommand cmd
   ["voicelist"]             -> Right $ voicelist
-  _                         -> Left $ "{\"type\": \"error\", \"message\": \"cannot parse message: " <> jstr message <> "\"}"
+  _                         -> Left $ "cannot parse message: " <> message
+
+retko err = "{\"type\": \"error\", \"message\": \"" <> jstr err <> "\"}"
 
 appSockets :: (Text -> Either Text (IO Text)) -> PendingConnection -> IO ()
 appSockets digest iconn = acceptRequest iconn >>= \conn -> forever $ digest <$> receiveData conn >>= \case
   Right action -> action >>= sendTextData conn
-  Left  error  -> Text.putStrLn error >> sendTextData conn error
+  Left  error  -> Text.putStrLn (retko error) >> sendTextData conn error
 
 appStatic = staticApp $ defaultWebAppSettings "."
 

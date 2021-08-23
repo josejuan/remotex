@@ -62,7 +62,7 @@
                   if(!r.success)
                     $(document.body).fadeOut(100).fadeIn(100).fadeOut(100).fadeIn(100);
                   if(r.message != "")
-                    $('#big').empty().append($('<span/>').text(r.message)).show();
+                    $('#big').empty().append($('<pre/>').append($('<code/>').text(r.message))).show();
                   if(r.html != "")
                     $('#big').html(r.html).show();
                   break;
@@ -156,8 +156,10 @@
                     .append($('<p class="text-voice"/>').text('LOW QUALITY VOICE'))
                     .append($('<p class="text-description"/>').text(speechResult))
                     .show();
-                else
-                  window.socket.send('voicecommand,' + speechResult);
+                else {
+                  var cmd = speechResult.trim().toLocaleLowerCase() == "ayuda" ? "voicelist" : ("voicecommand," + speechResult);
+                  window.socket.send(cmd);
+                }
               }
 
               recognition.onspeechend = function() {
