@@ -11,6 +11,20 @@
         const AUTO_BTN_MIN_T = 100;
         const AUTO_BTN_MIN_D = 50;
 
+        var fsRequested = false;
+        function requestFS() {
+          if(!fsRequested) {
+            fsRequested = true;
+            if (document.body.mozRequestFullScreen) {
+              document.body.mozRequestFullScreen();
+            } else if (document.body.webkitRequestFullScreen) {
+              document.body.webkitRequestFullscreen();
+            }
+            return false;
+          }
+          return true;
+        }
+
         var SpeechRecognition = SpeechRecognition || webkitSpeechRecognition;
         var SpeechGrammarList = SpeechGrammarList || webkitSpeechGrammarList;
         var SpeechRecognitionEvent = SpeechRecognitionEvent || webkitSpeechRecognitionEvent;
@@ -135,7 +149,10 @@
             };
             $('#big').click(function(e) { $('#big').hide(); });
             $('#touchpad').click(function(e) { setTab(e, '#canvas') });
-            $('#keyboard').click(function(e) { setTab(e, '#keyboardc'); prepareLayout() });
+            $('#keyboard').click(function(e) {
+              setTab(e, '#keyboardc');
+              window.setTimeout(prepareLayout, requestFS() ? 0: 1000);
+            });
             $('#voice').click(function(e) {
 
               var recognition = new SpeechRecognition();
