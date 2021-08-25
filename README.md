@@ -10,10 +10,7 @@ I made this version because Java consumes a lot of memory (see https://github.co
 1. only X11 server (use Java version for window users).
 1. any touch device (through web browser).
 1. easy keyboard layout keys recognition.
-1. (in progress) voice commands
-  [ ] backend populate list
-  [ ] backend run command
-  [ ] frontend UI sendind `socket.send("voicelist")`
+1. voice commands
 
 ## Voice Commands
 
@@ -25,11 +22,11 @@ Into your home `~/remotex/voicecommands` place executable **batch files** with l
 #!/bin/bash
 #remotex.title Lista Ficheros
 #remotex.description Hace un listado de ficheros
-#remotex.output html
+#remotex.outputmode html
 ...
 
 ```
 
-where `output` could be `html` or `text` and the exit code is used to get `success` state.
+where `outputmode` could `html`, `text` or `none` and the exit code is used to get `success` state.
 
 If no output, simply an `ok` reaction will be shown to user.
